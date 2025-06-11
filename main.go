@@ -2,14 +2,18 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"golang.org/x/net/html"
 	"golang.org/x/term"
 )
 
@@ -32,6 +36,7 @@ func init() {
 }
 
 func main() {
+	flag.Parse()
 	lines, err := readLines()
 	if err != nil {
 		panic(err)
@@ -47,18 +52,25 @@ func main() {
 		},
 	}
 
+	var jwg sync.WaitGroup
 	jobs := make(chan job, len(lines))
+
 	var wg sync.WaitGroup
 	for i := 0; i < workersCount; i++ {
 		wg.Add(1)
-		go execute(i, pool, jobs, &wg)
+		go execute(pool, jobs, &wg, &jwg)
 	}
 
+	// set initial jobs from the given urls
 	for _, url := range lines {
+		jwg.Add(1)
 		jobs <- job{url: url, depth: 0}
 	}
 
+	jwg.Wait()
+	fmt.Println("All jobs finished, closing jobs channel.")
 	close(jobs)
+
 	wg.Wait()
 	fmt.Printf("Worker instance created: %d\n", numWorkerCreated)
 }
@@ -77,7 +89,7 @@ func readLines() ([]string, error) {
 			}
 			break
 		} else if err != nil {
-			return ret, err
+			return []string{}, err
 		}
 		// make sure to split line by whitespace if there's any
 		ret = append(ret, strings.Fields(line)...)
@@ -85,18 +97,73 @@ func readLines() ([]string, error) {
 			break
 		}
 	}
-	return ret, nil
+
+	return slices.Compact(ret), nil
 }
 
-func execute(id int, pool *sync.Pool, jobs <-chan job, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for job := range jobs {
-		buf := pool.Get().([]byte)[:0]
-		if job.depth > maxDepth {
-			break
+func req(url string, buf *[]byte) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("http response error: %v", resp.Status)
+	}
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	*buf = append(*buf, payload...)
+	return nil
+}
+
+func getUrls(payload []byte) []string {
+	urls := []string{}
+	tokenizer := html.NewTokenizer(bytes.NewReader(payload))
+	for {
+		tok := tokenizer.Next()
+		switch tok {
+		case html.ErrorToken:
+			return urls
+		case html.StartTagToken, html.SelfClosingTagToken:
+			token := tokenizer.Token()
+			if token.Data == "a" {
+				for _, attr := range token.Attr {
+					if attr.Key == "href" && strings.HasPrefix(attr.Val, "http") {
+						urls = append(urls, attr.Val)
+					}
+				}
+			}
 		}
-		fmt.Printf("Worker %d started crawling the web\n", id)
-		fmt.Println("proccessing", job.url, len(buf))
+	}
+}
+
+func execute(pool *sync.Pool, jobs chan job, wg *sync.WaitGroup, jwg *sync.WaitGroup) {
+	defer wg.Done()
+	for j := range jobs {
+		buf := pool.Get().([]byte)[:0]
+		if j.depth == maxDepth {
+			jwg.Done()
+			pool.Put(buf)
+			continue
+		}
+		err := req(j.url, &buf)
+		if err != nil {
+			fmt.Printf("[X] Error while requesting to %v\n", j.url)
+			jwg.Done()
+			pool.Put(buf)
+			continue
+		}
+		urls := getUrls(buf)
+		for _, url := range urls {
+			jwg.Add(1)
+			go func() {
+				jobs <- job{url: url, depth: j.depth + 1}
+				fmt.Println("[+]", url, j.depth+1)
+			}()
+		}
 		pool.Put(buf)
+		jwg.Done()
 	}
 }
