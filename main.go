@@ -17,11 +17,6 @@ import (
 	"golang.org/x/term"
 )
 
-type job struct {
-	url   string
-	depth int
-}
-
 const N_WORKERS = 10
 
 var (
@@ -46,32 +41,32 @@ func main() {
 	pool := &sync.Pool{
 		New: func() any {
 			atomic.AddInt64(&numWorkerCreated, 1)
-			// TODO: buffer size should be configurable?
 			buf := make([]byte, 0, 1024*32)
 			return buf
 		},
 	}
 
 	var jwg sync.WaitGroup
-	jobs := make(chan job, len(lines))
-
+	jq := newJobQueue()
 	var wg sync.WaitGroup
+
 	for i := 0; i < workersCount; i++ {
 		wg.Add(1)
-		go execute(pool, jobs, &wg, &jwg)
+		go execute(pool, jq, &wg, &jwg)
 	}
 
 	// set initial jobs from the given urls
+	initialJobs := make([]job, 0, len(lines))
 	for _, url := range lines {
-		jwg.Add(1)
-		jobs <- job{url: url, depth: 0}
+		initialJobs = append(initialJobs, job{url: url, depth: 0})
 	}
+	jwg.Add(len(initialJobs))
+	jq.enqueue(initialJobs)
 
 	jwg.Wait()
-	fmt.Println("All jobs finished, closing jobs channel.")
-	close(jobs)
-
+	jq.close()
 	wg.Wait()
+
 	fmt.Printf("Worker instance created: %d\n", numWorkerCreated)
 }
 
@@ -139,9 +134,13 @@ func getUrls(payload []byte) []string {
 	}
 }
 
-func execute(pool *sync.Pool, jobs chan job, wg *sync.WaitGroup, jwg *sync.WaitGroup) {
+func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGroup) {
 	defer wg.Done()
-	for j := range jobs {
+	for {
+		j, ok := jq.dequeue()
+		if !ok {
+			break // queue is empty and closed
+		}
 		buf := pool.Get().([]byte)[:0]
 		if j.depth == maxDepth {
 			jwg.Done()
@@ -155,13 +154,18 @@ func execute(pool *sync.Pool, jobs chan job, wg *sync.WaitGroup, jwg *sync.WaitG
 			pool.Put(buf)
 			continue
 		}
+
 		urls := getUrls(buf)
-		for _, url := range urls {
-			jwg.Add(1)
-			go func() {
-				jobs <- job{url: url, depth: j.depth + 1}
+
+		if len(urls) > 0 {
+			newJobs := make([]job, 0, len(urls))
+			for _, url := range urls {
+				newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
 				fmt.Println("[+]", url, j.depth+1)
-			}()
+			}
+
+			jwg.Add(len(newJobs))
+			jq.enqueue(newJobs)
 		}
 		pool.Put(buf)
 		jwg.Done()
