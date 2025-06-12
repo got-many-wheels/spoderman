@@ -1,6 +1,9 @@
 package main
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 type job struct {
 	url   string
@@ -8,10 +11,11 @@ type job struct {
 }
 
 type jobQueue struct {
-	cond   *sync.Cond
-	mu     sync.Mutex
-	queue  []job
-	closed bool
+	cond    *sync.Cond
+	mu      sync.Mutex
+	queue   []job
+	closed  bool
+	crawled int64 // count of successful crawled urls
 }
 
 func newJobQueue() *jobQueue {
@@ -23,11 +27,10 @@ func newJobQueue() *jobQueue {
 func (jq *jobQueue) enqueue(jobs []job) {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
-
 	if jq.closed {
 		return
 	}
-
+	atomic.AddInt64(&jq.crawled, int64(len(jobs)))
 	for _, j := range jobs {
 		jq.queue = append(jq.queue, j)
 	}

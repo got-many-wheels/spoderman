@@ -23,20 +23,26 @@ var (
 	urls         []string
 	maxDepth     int
 	workersCount int
+	verbose      bool
+
+	_logger *logger
 )
 
 func init() {
 	flag.IntVar(&maxDepth, "depth", 1, "maximum depth for the crawler (default: 1)")
 	flag.IntVar(&workersCount, "workersCount", N_WORKERS, "amount of pooled worker (default: 10)")
+	flag.BoolVar(&verbose, "verbose", false, "show detailed logs when crawling")
 }
 
 func main() {
 	flag.Parse()
+	_logger = newLogger(verbose)
+	_logger.Debug().Int("workersCount", workersCount)
 	lines, err := readLines()
 	if err != nil {
 		panic(err)
 	}
-
+	_logger.Debug().Int("lines", len(lines))
 	var numWorkerCreated int64
 	pool := &sync.Pool{
 		New: func() any {
@@ -67,7 +73,8 @@ func main() {
 	jq.close()
 	wg.Wait()
 
-	fmt.Printf("Worker instance created: %d\n", numWorkerCreated)
+	_logger.Debug().Int("worker instance created", int(numWorkerCreated))
+	_logger.Info().Msg(fmt.Sprintf("%d link crawled successfully", jq.crawled))
 }
 
 func readLines() ([]string, error) {
@@ -149,7 +156,7 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGr
 		}
 		err := req(j.url, &buf)
 		if err != nil {
-			fmt.Printf("[X] Error while requesting to %v\n", j.url)
+			_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
 			jwg.Done()
 			pool.Put(buf)
 			continue
@@ -161,9 +168,8 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGr
 			newJobs := make([]job, 0, len(urls))
 			for _, url := range urls {
 				newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
-				fmt.Println("[+]", url, j.depth+1)
+				_logger.log.Debug().Msg(fmt.Sprintf("%s", url))
 			}
-
 			jwg.Add(len(newJobs))
 			jq.enqueue(newJobs)
 		}
