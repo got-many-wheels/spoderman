@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/net/html"
 	"golang.org/x/term"
@@ -20,12 +22,14 @@ import (
 const N_WORKERS = 10
 
 var (
-	urls         []string
+	// flags
 	maxDepth     int
 	workersCount int
 	verbose      bool
 
-	_logger *logger
+	_logger   *logger
+	once      sync.Once
+	netClient *http.Client
 )
 
 func init() {
@@ -36,6 +40,7 @@ func init() {
 
 func main() {
 	flag.Parse()
+	newNetClient()
 	_logger = newLogger(verbose)
 	_logger.Debug().Int("workersCount", workersCount)
 	lines, err := readLines()
@@ -103,8 +108,24 @@ func readLines() ([]string, error) {
 	return slices.Compact(ret), nil
 }
 
+func newNetClient() *http.Client {
+	once.Do(func() {
+		var netTransport = &http.Transport{
+			Dial: (&net.Dialer{
+				Timeout: 2 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout: 2 * time.Second,
+		}
+		netClient = &http.Client{
+			Timeout:   time.Second * 2,
+			Transport: netTransport,
+		}
+	})
+	return netClient
+}
+
 func req(url string, buf *[]byte) error {
-	resp, err := http.Get(url)
+	resp, err := netClient.Get(url)
 	if err != nil {
 		return err
 	}
