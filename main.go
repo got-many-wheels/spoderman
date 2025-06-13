@@ -35,10 +35,10 @@ var (
 )
 
 func init() {
-	flag.IntVar(&maxDepth, "depth", 1, "maximum depth for the crawler (default: 1)")
-	flag.IntVar(&workersCount, "workersCount", N_WORKERS, "amount of pooled worker (default: 10)")
-	flag.BoolVar(&verbose, "verbose", false, "show detailed logs when crawling")
-	flag.BoolVar(&base, "base", false, "limit crawler to target base domain only")
+	flag.IntVar(&maxDepth, "depth", 1, "Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 1)")
+	flag.IntVar(&workersCount, "workersCount", N_WORKERS, "Number of concurrent workers to crawl URLs in parallel (default: 10)")
+	flag.BoolVar(&verbose, "verbose", false, "Enables detailed logs for each crawling operation.")
+	flag.BoolVar(&base, "base", false, "Restrict crawling to the base domain only (same host as initial URL)")
 }
 
 func main() {
