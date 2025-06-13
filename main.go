@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -26,6 +27,7 @@ var (
 	maxDepth     int
 	workersCount int
 	verbose      bool
+	base         bool
 
 	_logger   *logger
 	once      sync.Once
@@ -36,6 +38,7 @@ func init() {
 	flag.IntVar(&maxDepth, "depth", 1, "maximum depth for the crawler (default: 1)")
 	flag.IntVar(&workersCount, "workersCount", N_WORKERS, "amount of pooled worker (default: 10)")
 	flag.BoolVar(&verbose, "verbose", false, "show detailed logs when crawling")
+	flag.BoolVar(&base, "base", false, "limit crawler to target base domain only")
 }
 
 func main() {
@@ -68,8 +71,17 @@ func main() {
 
 	// set initial jobs from the given urls
 	initialJobs := make([]job, 0, len(lines))
-	for _, url := range lines {
-		initialJobs = append(initialJobs, job{url: url, depth: 0})
+	for _, initialUrl := range lines {
+		initialJobs = append(initialJobs, job{url: initialUrl, depth: 0})
+		u, err := url.Parse(initialUrl)
+		if err != nil {
+			_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
+			continue
+		}
+		hostname := u.Hostname()
+		if _, ok := jq.basePaths[hostname]; !ok {
+			jq.basePaths[hostname] = true
+		}
 	}
 	jwg.Add(len(initialJobs))
 	jq.enqueue(initialJobs)
@@ -79,7 +91,7 @@ func main() {
 	wg.Wait()
 
 	_logger.Debug().Int("worker instance created", int(numWorkerCreated))
-	_logger.Info().Msg(fmt.Sprintf("%d link crawled successfully", jq.crawled))
+	_logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", jq.crawled))
 }
 
 func readLines() ([]string, error) {
@@ -175,6 +187,22 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGr
 			pool.Put(buf)
 			continue
 		}
+
+		// do check hostname if the new url is within the initial url hostname
+		if base {
+			ok, err := jq.checkHostname(j.url)
+			if err != nil || !ok {
+				if err != nil {
+					_logger.log.Debug().Err(err).Msg(err.Error())
+				}
+				jwg.Done()
+				pool.Put(buf)
+				continue
+			}
+		}
+
+		_logger.log.Debug().Msg(fmt.Sprintf("%s", j.url))
+
 		err := req(j.url, &buf)
 		if err != nil {
 			_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
@@ -189,7 +217,6 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGr
 			newJobs := make([]job, 0, len(urls))
 			for _, url := range urls {
 				newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
-				_logger.log.Debug().Msg(fmt.Sprintf("%s", url))
 			}
 			jwg.Add(len(newJobs))
 			jq.enqueue(newJobs)

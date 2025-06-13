@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"net/url"
 	"sync"
 	"sync/atomic"
 )
@@ -11,15 +13,18 @@ type job struct {
 }
 
 type jobQueue struct {
-	cond    *sync.Cond
-	mu      sync.Mutex
-	queue   []job
-	closed  bool
-	crawled int64 // count of successful crawled urls
+	cond      *sync.Cond
+	mu        sync.Mutex
+	queue     []job
+	closed    bool
+	crawled   int64 // count of successful crawled urls
+	basePaths map[string]bool
 }
 
 func newJobQueue() *jobQueue {
-	jq := &jobQueue{}
+	jq := &jobQueue{
+		basePaths: make(map[string]bool),
+	}
 	jq.cond = sync.NewCond(&jq.mu)
 	return jq
 }
@@ -60,4 +65,16 @@ func (jq *jobQueue) close() {
 	defer jq.mu.Unlock()
 	jq.closed = true
 	jq.cond.Broadcast()
+}
+
+func (jq *jobQueue) checkHostname(u string) (bool, error) {
+	incUrl, err := url.Parse(u)
+	if err != nil {
+		return false, fmt.Errorf("Error while parsing initial url %v\n", u)
+	}
+	hostname := incUrl.Hostname()
+	if _, ok := jq.basePaths[hostname]; !ok {
+		return false, nil
+	}
+	return true, nil
 }
