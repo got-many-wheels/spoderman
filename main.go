@@ -20,8 +20,6 @@ import (
 	"golang.org/x/term"
 )
 
-const N_WORKERS = 10
-
 var (
 	// flags
 	maxDepth     int
@@ -36,7 +34,7 @@ var (
 
 func init() {
 	flag.IntVar(&maxDepth, "depth", 1, "Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 1)")
-	flag.IntVar(&workersCount, "workersCount", N_WORKERS, "Number of concurrent workers to crawl URLs in parallel (default: 10)")
+	flag.IntVar(&workersCount, "workersCount", 10, "Number of concurrent workers to crawl URLs in parallel (default: 10)")
 	flag.BoolVar(&verbose, "verbose", false, "Enables detailed logs for each crawling operation.")
 	flag.BoolVar(&base, "base", false, "Restrict crawling to the base domain only (same host as initial URL)")
 }
@@ -72,16 +70,16 @@ func main() {
 	// set initial jobs from the given urls
 	initialJobs := make([]job, 0, len(lines))
 	for _, initialUrl := range lines {
+		if base {
+			u, err := url.Parse(initialUrl)
+			if err != nil {
+				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
+				continue
+			}
+			hostname := u.Hostname()
+			jq.basePaths.Store(hostname, true)
+		}
 		initialJobs = append(initialJobs, job{url: initialUrl, depth: 0})
-		u, err := url.Parse(initialUrl)
-		if err != nil {
-			_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
-			continue
-		}
-		hostname := u.Hostname()
-		if _, ok := jq.basePaths[hostname]; !ok {
-			jq.basePaths[hostname] = true
-		}
 	}
 	jwg.Add(len(initialJobs))
 	jq.enqueue(initialJobs)
@@ -153,9 +151,13 @@ func req(url string, buf *[]byte) error {
 	return nil
 }
 
-func getUrls(payload []byte) []string {
+func getUrls(u string, payload []byte) []string {
 	urls := []string{}
 	tokenizer := html.NewTokenizer(bytes.NewReader(payload))
+	baseURL, err := url.Parse(u)
+	if err != nil {
+		return urls
+	}
 	for {
 		tok := tokenizer.Next()
 		switch tok {
@@ -165,8 +167,14 @@ func getUrls(payload []byte) []string {
 			token := tokenizer.Token()
 			if token.Data == "a" {
 				for _, attr := range token.Attr {
-					if attr.Key == "href" && strings.HasPrefix(attr.Val, "http") {
-						urls = append(urls, attr.Val)
+					if attr.Key == "href" {
+						href := strings.TrimSpace(attr.Val)
+						parsedHref, err := url.Parse(href)
+						if err != nil {
+							continue
+						}
+						fullURL := baseURL.ResolveReference(parsedHref).String()
+						urls = append(urls, fullURL)
 					}
 				}
 			}
@@ -190,11 +198,16 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGr
 
 		// do check hostname if the new url is within the initial url hostname
 		if base {
-			ok, err := jq.checkHostname(j.url)
-			if err != nil || !ok {
-				if err != nil {
-					_logger.log.Debug().Err(err).Msg(err.Error())
-				}
+			u, err := url.Parse(j.url)
+			if err != nil {
+				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
+				jwg.Done()
+				pool.Put(buf)
+				continue
+			}
+			hostname := u.Hostname()
+			_, present := jq.basePaths.Load(hostname)
+			if !present {
 				jwg.Done()
 				pool.Put(buf)
 				continue
@@ -211,11 +224,14 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGr
 			continue
 		}
 
-		urls := getUrls(buf)
+		urls := getUrls(j.url, buf)
 
 		if len(urls) > 0 {
 			newJobs := make([]job, 0, len(urls))
 			for _, url := range urls {
+				if jq.isVisited(url) {
+					continue
+				}
 				newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
 			}
 			jwg.Add(len(newJobs))

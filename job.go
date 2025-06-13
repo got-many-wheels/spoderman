@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"net/url"
 	"sync"
 	"sync/atomic"
 )
@@ -18,13 +16,12 @@ type jobQueue struct {
 	queue     []job
 	closed    bool
 	crawled   int64 // count of successful crawled urls
-	basePaths map[string]bool
+	basePaths sync.Map
+	sm        sync.Map
 }
 
 func newJobQueue() *jobQueue {
-	jq := &jobQueue{
-		basePaths: make(map[string]bool),
-	}
+	jq := &jobQueue{}
 	jq.cond = sync.NewCond(&jq.mu)
 	return jq
 }
@@ -67,14 +64,11 @@ func (jq *jobQueue) close() {
 	jq.cond.Broadcast()
 }
 
-func (jq *jobQueue) checkHostname(u string) (bool, error) {
-	incUrl, err := url.Parse(u)
-	if err != nil {
-		return false, fmt.Errorf("Error while parsing initial url %v\n", u)
+func (jq *jobQueue) isVisited(u string) bool {
+	_, present := jq.sm.Load(u)
+	if present {
+		return true
 	}
-	hostname := incUrl.Hostname()
-	if _, ok := jq.basePaths[hostname]; !ok {
-		return false, nil
-	}
-	return true, nil
+	jq.sm.Store(u, true)
+	return false
 }
