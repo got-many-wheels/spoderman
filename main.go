@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,10 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/html"
@@ -58,13 +62,16 @@ func main() {
 		},
 	}
 
-	var jwg sync.WaitGroup
-	jq := newJobQueue()
 	var wg sync.WaitGroup
+	jq := newJobQueue()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	for i := 0; i < workersCount; i++ {
 		wg.Add(1)
-		go execute(pool, jq, &wg, &jwg)
+		go execute(pool, jq, &wg, ctx)
 	}
 
 	// set initial jobs from the given urls
@@ -81,14 +88,20 @@ func main() {
 		}
 		initialJobs = append(initialJobs, job{url: initialUrl, depth: 0})
 	}
-	jwg.Add(len(initialJobs))
 	jq.enqueue(initialJobs)
 
-	jwg.Wait()
-	jq.close()
+	go func() {
+		<-sigChan
+		_logger.Info().Msg("Received shutdown signal, initiating graceful shutdown...")
+		cancel()
+		jq.clearJobWaitGroup() // clear all wait group in order to unblock job wait group
+		jq.clear()
+	}()
+
+	jq.clear()
 	wg.Wait()
 
-	_logger.Debug().Int("worker instance created", int(numWorkerCreated))
+	_logger.Debug().Msg(fmt.Sprintf("%d worker instance created", int(numWorkerCreated)))
 	_logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", jq.crawled))
 }
 
@@ -134,8 +147,12 @@ func newNetClient() *http.Client {
 	return netClient
 }
 
-func req(url string, buf *[]byte) error {
-	resp, err := netClient.Get(url)
+func req(url string, buf *[]byte, ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := netClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -182,62 +199,81 @@ func getUrls(u string, payload []byte) []string {
 	}
 }
 
-func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, jwg *sync.WaitGroup) {
+func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Context) {
 	defer wg.Done()
 	for {
+		buf := pool.Get().([]byte)[:0]
 		j, ok := jq.dequeue()
 		if !ok {
+			pool.Put(buf)
 			break // queue is empty and closed
 		}
-		buf := pool.Get().([]byte)[:0]
-		if j.depth == maxDepth {
-			jwg.Done()
-			pool.Put(buf)
-			continue
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 
-		// do check hostname if the new url is within the initial url hostname
-		if base {
-			u, err := url.Parse(j.url)
-			if err != nil {
-				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
-				jwg.Done()
-				pool.Put(buf)
-				continue
+		func() {
+			defer pool.Put(buf)
+			defer jq.jwg.Done()
+
+			if j.depth == maxDepth {
+				return
 			}
-			hostname := u.Hostname()
-			_, present := jq.basePaths.Load(hostname)
-			if !present {
-				jwg.Done()
-				pool.Put(buf)
-				continue
-			}
-		}
 
-		_logger.log.Debug().Msg(fmt.Sprintf("%s", j.url))
-
-		err := req(j.url, &buf)
-		if err != nil {
-			_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
-			jwg.Done()
-			pool.Put(buf)
-			continue
-		}
-
-		urls := getUrls(j.url, buf)
-
-		if len(urls) > 0 {
-			newJobs := make([]job, 0, len(urls))
-			for _, url := range urls {
-				if jq.isVisited(url) {
-					continue
+			// do check hostname if the new url is within the initial url hostname
+			if base {
+				u, err := url.Parse(j.url)
+				if err != nil {
+					_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
+					return
 				}
-				newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
+				hostname := u.Hostname()
+				_, present := jq.basePaths.Load(hostname)
+				if !present {
+					return
+				}
 			}
-			jwg.Add(len(newJobs))
-			jq.enqueue(newJobs)
-		}
-		pool.Put(buf)
-		jwg.Done()
+
+			_logger.log.Debug().Msg(fmt.Sprintf("%s", j.url))
+
+			err := req(j.url, &buf, ctx)
+			if err != nil {
+				// ignore expected canceled error
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			urls := getUrls(j.url, buf)
+
+			if len(urls) > 0 {
+				newJobs := make([]job, 0, len(urls))
+				for _, url := range urls {
+					if jq.isVisited(url) {
+						continue
+					}
+					newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					if len(newJobs) > 0 {
+						jq.enqueue(newJobs)
+					}
+				}
+			}
+		}()
 	}
 }

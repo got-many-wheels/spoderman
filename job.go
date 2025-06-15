@@ -18,6 +18,7 @@ type jobQueue struct {
 	crawled   int64 // count of successful crawled urls
 	basePaths sync.Map
 	sm        sync.Map
+	jwg       sync.WaitGroup // jobs wait group
 }
 
 func newJobQueue() *jobQueue {
@@ -34,6 +35,7 @@ func (jq *jobQueue) enqueue(jobs []job) {
 	}
 	atomic.AddInt64(&jq.crawled, int64(len(jobs)))
 	for _, j := range jobs {
+		jq.jwg.Add(1)
 		jq.queue = append(jq.queue, j)
 	}
 	jq.cond.Broadcast()
@@ -55,6 +57,17 @@ func (jq *jobQueue) dequeue() (job, bool) {
 	job := jq.queue[0]
 	jq.queue = jq.queue[1:]
 	return job, true
+}
+
+func (jq *jobQueue) clear() {
+	jq.jwg.Wait()
+	jq.close()
+}
+
+func (jq *jobQueue) clearJobWaitGroup() {
+	for range jq.queue {
+		jq.jwg.Done()
+	}
 }
 
 func (jq *jobQueue) close() {
