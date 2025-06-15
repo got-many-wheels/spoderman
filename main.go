@@ -202,10 +202,8 @@ func getUrls(u string, payload []byte) []string {
 func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Context) {
 	defer wg.Done()
 	for {
-		buf := pool.Get().([]byte)[:0]
 		j, ok := jq.dequeue()
 		if !ok {
-			pool.Put(buf)
 			break // queue is empty and closed
 		}
 
@@ -216,7 +214,6 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 		}
 
 		func() {
-			defer pool.Put(buf)
 			defer jq.jwg.Done()
 
 			if j.depth == maxDepth {
@@ -237,6 +234,9 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 				}
 			}
 
+			buf := pool.Get().([]byte)[:0]
+			defer pool.Put(buf)
+
 			_logger.log.Debug().Msg(fmt.Sprintf("%s", j.url))
 
 			err := req(j.url, &buf, ctx)
@@ -247,12 +247,6 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 				}
 				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
 				return
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			default:
 			}
 
 			urls := getUrls(j.url, buf)
