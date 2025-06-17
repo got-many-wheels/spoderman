@@ -1,4 +1,4 @@
-package main
+package logger
 
 import (
 	"os"
@@ -6,15 +6,14 @@ import (
 	"github.com/phuslu/log"
 )
 
-type logger struct {
-	log     log.Logger
-	verbose bool
+type Logger struct {
+	log log.Logger
 }
 
-func newLogger(v bool) *logger {
-	l := logger{verbose: v}
+func New(verbose bool) *Logger {
+	l := Logger{}
 	level := log.InfoLevel
-	if v {
+	if verbose {
 		level = log.TraceLevel
 	}
 	if log.IsTerminal(os.Stderr.Fd()) {
@@ -36,18 +35,23 @@ func newLogger(v bool) *logger {
 	return &l
 }
 
-func (l *logger) Debug() *log.Entry {
+func (l *Logger) ToVerbose() {
+	newLogger := New(true)
+	l.log = newLogger.log
+}
+
+func (l *Logger) Debug() *log.Entry {
 	return l.log.Debug()
 }
 
-func (l *logger) Info() *log.Entry {
+func (l *Logger) Info() *log.Entry {
 	return l.log.Info()
 }
 
-func (l *logger) Warn() *log.Entry {
+func (l *Logger) Warn() *log.Entry {
 	return l.log.Warn()
 }
 
-func (l *logger) Error() *log.Entry {
+func (l *Logger) Error() *log.Entry {
 	return l.log.Error()
 }

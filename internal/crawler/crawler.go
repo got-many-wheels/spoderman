@@ -1,14 +1,12 @@
-package main
+package crawler
 
 import (
 	"bufio"
 	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,42 +16,39 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
+	"github.com/got-many-wheels/spoderman/internal/logger"
 	"golang.org/x/net/html"
 	"golang.org/x/term"
 )
 
-var (
-	// flags
-	maxDepth     int
-	workersCount int
-	verbose      bool
-	base         bool
-
-	_logger   *logger
-	once      sync.Once
-	netClient *http.Client
-)
-
-func init() {
-	// will run forever if the depth set to 0
-	flag.IntVar(&maxDepth, "depth", 1, "Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 1)")
-	flag.IntVar(&workersCount, "workersCount", 10, "Number of concurrent workers to crawl URLs in parallel (default: 10)")
-	flag.BoolVar(&verbose, "verbose", false, "Enables detailed logs for each crawling operation.")
-	flag.BoolVar(&base, "base", false, "Restrict crawling to the base domain only (same host as initial URL)")
+type Crawler struct {
+	logger *logger.Logger
+	config Config
+	wg     sync.WaitGroup
+	jq     *jobQueue
 }
 
-func main() {
-	flag.Parse()
+type Config struct {
+	Workers int
+	Depth   int
+	Base    bool
+}
+
+func New(logger *logger.Logger, c Config) *Crawler {
+	return &Crawler{
+		logger: logger,
+		config: c,
+		jq:     newJobQueue(),
+	}
+}
+
+func (c *Crawler) Do() error {
 	newNetClient()
-	_logger = newLogger(verbose)
-	_logger.Debug().Int("workersCount", workersCount)
-	lines, err := readLines()
+	lines, err := c.readLines()
 	if err != nil {
 		panic(err)
 	}
-	_logger.Debug().Int("lines", len(lines))
 	var numWorkerCreated int64
 	pool := &sync.Pool{
 		New: func() any {
@@ -62,51 +57,47 @@ func main() {
 			return buf
 		},
 	}
-
-	var wg sync.WaitGroup
-	jq := newJobQueue()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	for i := 0; i < workersCount; i++ {
-		wg.Add(1)
-		go execute(pool, jq, &wg, ctx)
+	for i := 0; i < c.config.Workers; i++ {
+		c.wg.Add(1)
+		go c.execute(pool, ctx)
 	}
 
-	// set initial jobs from the given urls
 	initialJobs := make([]job, 0, len(lines))
 	for _, initialUrl := range lines {
-		if base {
+		if c.config.Base {
 			u, err := url.Parse(initialUrl)
 			if err != nil {
-				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
+				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
 				continue
 			}
 			hostname := u.Hostname()
-			jq.basePaths.Store(hostname, true)
+			c.jq.basePaths.Store(hostname, true)
 		}
 		initialJobs = append(initialJobs, job{url: initialUrl, depth: 1})
 	}
-	jq.enqueue(initialJobs)
+	c.jq.enqueue(initialJobs)
 
 	go func() {
 		<-sigChan
-		_logger.Info().Msg("Received shutdown signal, initiating graceful shutdown...")
+		c.logger.Info().Msg("Received shutdown signal, initiating graceful shutdown...")
 		cancel()
-		jq.clearJobWaitGroup() // clear all wait group in order to unblock job wait group
-		jq.clear()
+		c.jq.clearJobWaitGroup() // clear all wait group in order to unblock job wait group
+		c.jq.clear()
 	}()
 
-	jq.clear()
-	wg.Wait()
+	c.jq.clear()
+	c.wg.Wait()
 
-	_logger.Debug().Msg(fmt.Sprintf("%d worker instance created", int(numWorkerCreated)))
-	_logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", jq.crawled))
+	c.logger.Debug().Msg(fmt.Sprintf("%d worker instance created", int(numWorkerCreated)))
+	c.logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", c.jq.crawled))
+	return nil
 }
 
-func readLines() ([]string, error) {
+func (c *Crawler) readLines() ([]string, error) {
 	ret := []string{}
 	// to check whether the input came from pipe or manual user input
 	fromPipe := !term.IsTerminal(int(os.Stdin.Fd()))
@@ -132,23 +123,7 @@ func readLines() ([]string, error) {
 	return slices.Compact(ret), nil
 }
 
-func newNetClient() *http.Client {
-	once.Do(func() {
-		var netTransport = &http.Transport{
-			Dial: (&net.Dialer{
-				Timeout: 2 * time.Second,
-			}).Dial,
-			TLSHandshakeTimeout: 2 * time.Second,
-		}
-		netClient = &http.Client{
-			Timeout:   time.Second * 2,
-			Transport: netTransport,
-		}
-	})
-	return netClient
-}
-
-func req(url string, buf *[]byte, ctx context.Context) error {
+func (c *Crawler) req(url string, buf *[]byte, ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
@@ -169,7 +144,7 @@ func req(url string, buf *[]byte, ctx context.Context) error {
 	return nil
 }
 
-func getUrls(u string, payload []byte) []string {
+func (c *Crawler) getUrls(u string, payload []byte) []string {
 	urls := []string{}
 	tokenizer := html.NewTokenizer(bytes.NewReader(payload))
 	baseURL, err := url.Parse(u)
@@ -200,10 +175,10 @@ func getUrls(u string, payload []byte) []string {
 	}
 }
 
-func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Context) {
-	defer wg.Done()
+func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
+	defer c.wg.Done()
 	for {
-		j, ok := jq.dequeue()
+		j, ok := c.jq.dequeue()
 		if !ok {
 			break // queue is empty and closed
 		}
@@ -217,44 +192,44 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 		func() {
 			buf := pool.Get().([]byte)[:0]
 			defer pool.Put(buf)
-			defer jq.jwg.Done()
+			defer c.jq.jwg.Done()
 
-			if maxDepth != 0 && j.depth > maxDepth {
+			if c.config.Depth != 0 && j.depth > c.config.Depth {
 				return
 			}
 
 			// do check hostname if the new url is within the initial url hostname
-			if base {
+			if c.config.Base {
 				u, err := url.Parse(j.url)
 				if err != nil {
-					_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
+					c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
 					return
 				}
 				hostname := u.Hostname()
-				_, present := jq.basePaths.Load(hostname)
+				_, present := c.jq.basePaths.Load(hostname)
 				if !present {
 					return
 				}
 			}
 
-			_logger.log.Debug().Msg(fmt.Sprintf("Visiting %s", j.url))
+			c.logger.Debug().Msg(fmt.Sprintf("Visiting %s", j.url))
 
-			err := req(j.url, &buf, ctx)
+			err := c.req(j.url, &buf, ctx)
 			if err != nil {
 				// ignore expected canceled error
 				if errors.Is(err, context.Canceled) {
 					return
 				}
-				_logger.log.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
+				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
 				return
 			}
 
-			urls := getUrls(j.url, buf)
+			urls := c.getUrls(j.url, buf)
 
 			if len(urls) > 0 {
 				newJobs := make([]job, 0, len(urls))
 				for _, url := range urls {
-					if jq.isVisited(url) {
+					if c.jq.isVisited(url) {
 						continue
 					}
 					newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
@@ -264,7 +239,7 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 					return
 				default:
 					if len(newJobs) > 0 {
-						jq.enqueue(newJobs)
+						c.jq.enqueue(newJobs)
 					}
 				}
 			}
