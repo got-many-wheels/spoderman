@@ -6,6 +6,12 @@
 
 A Dead simple and fast web crawler that can be specified to crawl certain websites and depths.
 
+## Features
+
+- Quick asl.
+- Support crawling multiple target at once & multiple target urls input with a file.
+- Support local file scan.
+
 ## Installation
 
 ```bash
@@ -38,23 +44,25 @@ GLOBAL OPTIONS:
 
 ```bash
 # run the binary and enter a URL when prompted
-spoderman crawl
+spoderman crawl -u http://127.0.0.1:8080
 ```
 
 #### Multiple urls
 
 ```bash
-cat examples/input.txt | spoderman crawl
+spoderman crawl -f ./examples/urls.txt
 ```
 
 Options:
-- --depth int, -d int    Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 1)
-- --workers int, -w int  Number of concurrent workers to crawl URLs in parallel. (default: 10)
-- --base, -b             Restrict crawling to the base domain only. (default: true)
--  --help, -h            show help
+- --depth int, -d int           Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 1)
+- --workers int, -w int         Number of concurrent workers to crawl URLs in parallel. (default: 10)
+- --base, -b                    Restrict crawling to the base domain only. (default: true)
+- --url string, -u string       Target Url.
+- --url-file string, -f string  Target urls file, separated by line break.
+- --help, -h                    show help
 
 #### Example usage:
 
 ```bash
-spoderman crawl -depth 3 -workersCount 20 -verbose -base
+spoderman crawl -u http://127.0.0.1:8080 --depth 3 --workers 20 --verbose --base
 ```

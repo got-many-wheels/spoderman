@@ -1,7 +1,6 @@
 package crawler
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -11,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,10 +17,10 @@ import (
 
 	"github.com/got-many-wheels/spoderman/internal/logger"
 	"golang.org/x/net/html"
-	"golang.org/x/term"
 )
 
 type Crawler struct {
+	urls   []string
 	logger *logger.Logger
 	config Config
 	wg     sync.WaitGroup
@@ -35,8 +33,9 @@ type Config struct {
 	Base    bool
 }
 
-func New(logger *logger.Logger, c Config) *Crawler {
+func New(logger *logger.Logger, urls []string, c Config) *Crawler {
 	return &Crawler{
+		urls:   urls,
 		logger: logger,
 		config: c,
 		jq:     newJobQueue(),
@@ -45,9 +44,8 @@ func New(logger *logger.Logger, c Config) *Crawler {
 
 func (c *Crawler) Do() error {
 	newNetClient()
-	lines, err := c.readLines()
-	if err != nil {
-		panic(err)
+	if len(c.urls) == 0 {
+		return errors.New("Please provide at least 1 url to crawl to")
 	}
 	var numWorkerCreated int64
 	pool := &sync.Pool{
@@ -66,8 +64,8 @@ func (c *Crawler) Do() error {
 		go c.execute(pool, ctx)
 	}
 
-	initialJobs := make([]job, 0, len(lines))
-	for _, initialUrl := range lines {
+	initialJobs := make([]job, 0, len(c.urls))
+	for _, initialUrl := range c.urls {
 		if c.config.Base {
 			u, err := url.Parse(initialUrl)
 			if err != nil {
@@ -95,32 +93,6 @@ func (c *Crawler) Do() error {
 	c.logger.Debug().Msg(fmt.Sprintf("%d worker instance created", int(numWorkerCreated)))
 	c.logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", c.jq.crawled))
 	return nil
-}
-
-func (c *Crawler) readLines() ([]string, error) {
-	ret := []string{}
-	// to check whether the input came from pipe or manual user input
-	fromPipe := !term.IsTerminal(int(os.Stdin.Fd()))
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		line, err := reader.ReadString('\n')
-		if err == io.EOF {
-			// prevent losing trailing input on EOF
-			if len(line) > 0 {
-				ret = append(ret, strings.TrimSpace(line))
-			}
-			break
-		} else if err != nil {
-			return []string{}, err
-		}
-		// make sure to split line by whitespace if there's any
-		ret = append(ret, strings.Fields(line)...)
-		if !fromPipe {
-			break
-		}
-	}
-
-	return slices.Compact(ret), nil
 }
 
 func (c *Crawler) req(url string, buf *[]byte, ctx context.Context) error {
