@@ -37,6 +37,7 @@ var (
 )
 
 func init() {
+	// will run forever if the depth set to 0
 	flag.IntVar(&maxDepth, "depth", 1, "Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 1)")
 	flag.IntVar(&workersCount, "workersCount", 10, "Number of concurrent workers to crawl URLs in parallel (default: 10)")
 	flag.BoolVar(&verbose, "verbose", false, "Enables detailed logs for each crawling operation.")
@@ -86,7 +87,7 @@ func main() {
 			hostname := u.Hostname()
 			jq.basePaths.Store(hostname, true)
 		}
-		initialJobs = append(initialJobs, job{url: initialUrl, depth: 0})
+		initialJobs = append(initialJobs, job{url: initialUrl, depth: 1})
 	}
 	jq.enqueue(initialJobs)
 
@@ -214,9 +215,11 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 		}
 
 		func() {
+			buf := pool.Get().([]byte)[:0]
+			defer pool.Put(buf)
 			defer jq.jwg.Done()
 
-			if j.depth == maxDepth {
+			if maxDepth != 0 && j.depth > maxDepth {
 				return
 			}
 
@@ -234,10 +237,7 @@ func execute(pool *sync.Pool, jq *jobQueue, wg *sync.WaitGroup, ctx context.Cont
 				}
 			}
 
-			buf := pool.Get().([]byte)[:0]
-			defer pool.Put(buf)
-
-			_logger.log.Debug().Msg(fmt.Sprintf("%s", j.url))
+			_logger.log.Debug().Msg(fmt.Sprintf("Visiting %s", j.url))
 
 			err := req(j.url, &buf, ctx)
 			if err != nil {
