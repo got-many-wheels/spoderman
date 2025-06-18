@@ -57,16 +57,22 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 				Aliases: []string{"f"},
 			},
 			&ucli.StringFlag{
-				Name:    "allowedHostnames",
+				Name:    "allowedDomains",
 				Value:   "",
-				Usage:   "Hostname whitelist, separated by commas",
+				Usage:   "Domain whitelist, separated by commas.",
 				Aliases: []string{"a"},
 			},
 			&ucli.StringFlag{
-				Name:    "disallowedHostnames",
+				Name:    "disallowedDomains",
 				Value:   "",
-				Usage:   "Hostname blacklist, separated by commas",
+				Usage:   "Domain blacklist, separated by commas.",
 				Aliases: []string{"a"},
+			},
+			&ucli.StringFlag{
+				Name:    "config",
+				Value:   "",
+				Usage:   "Set config file, defaults to set flag values or empty",
+				Aliases: []string{"i"},
 			},
 		},
 		Action: func(ctx context.Context, c *ucli.Command) error {
@@ -99,7 +105,16 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 				}
 			}
 
-			allowedDomains, disallowedDomains := c.String("allowedHostnames"), c.String("disallowedHostnames")
+			cfgSrc := c.String("config")
+			if len(cfgSrc) > 0 {
+				currConf, err := config.ParseJsonConfig(cfgSrc)
+				if err != nil {
+					return err
+				}
+				cfg = currConf
+			}
+
+			allowedDomains, disallowedDomains := c.String("allowedDomains"), c.String("disallowedDomains")
 			if len(allowedDomains) > 0 {
 				zp := regexp.MustCompile(` *, *`)
 				cfg.AllowedDomains = append(cfg.AllowedDomains, zp.Split(allowedDomains, -1)...)

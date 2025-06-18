@@ -21,20 +21,28 @@ import (
 )
 
 type Crawler struct {
-	urls      []string
-	logger    *logger.Logger
-	config    config.Config
-	wg        sync.WaitGroup
-	jq        *jobQueue
-	urlFilter []string
+	urls    []string
+	logger  *logger.Logger
+	filters *chainedFilters
+	config  config.Config
+	wg      sync.WaitGroup
+	jq      *jobQueue
 }
 
 func New(logger *logger.Logger, urls []string, c config.Config) *Crawler {
+	var f []urlFilter
+	if len(c.AllowedDomains) > 0 {
+		f = append(f, &allowedFilter{allowed: c.AllowedDomains})
+	}
+	f = append(f, &disallowedFilter{disallowed: c.DisallowedDomains})
+	filters := &chainedFilters{filters: f}
+
 	return &Crawler{
-		urls:   urls,
-		logger: logger,
-		config: c,
-		jq:     newJobQueue(),
+		urls:    urls,
+		logger:  logger,
+		config:  c,
+		jq:      newJobQueue(),
+		filters: filters,
 	}
 }
 
@@ -198,6 +206,9 @@ func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 				newJobs := make([]job, 0, len(urls))
 				for _, url := range urls {
 					if c.jq.isVisited(url) {
+						continue
+					}
+					if !c.filters.allow(url) {
 						continue
 					}
 					newJobs = append(newJobs, job{url: url, depth: j.depth + 1})

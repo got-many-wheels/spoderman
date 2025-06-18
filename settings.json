@@ -1,11 +1,8 @@
 {
 	"verbose": true,
-	"depth": 2,
+	"depth": 3,
 	"workers": 10,
 	"base": false,
-	"allowedHostNames": [],
-	"disallowedHostNames": [
-		"youtube",
-		"shopify"
-	]
+	"allowedDomains": [],
+	"disallowedDomains": []
 }
