@@ -15,25 +15,21 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/got-many-wheels/spoderman/internal/config"
 	"github.com/got-many-wheels/spoderman/internal/logger"
 	"golang.org/x/net/html"
 )
 
 type Crawler struct {
-	urls   []string
-	logger *logger.Logger
-	config Config
-	wg     sync.WaitGroup
-	jq     *jobQueue
+	urls      []string
+	logger    *logger.Logger
+	config    config.Config
+	wg        sync.WaitGroup
+	jq        *jobQueue
+	urlFilter []string
 }
 
-type Config struct {
-	Workers int
-	Depth   int
-	Base    bool
-}
-
-func New(logger *logger.Logger, urls []string, c Config) *Crawler {
+func New(logger *logger.Logger, urls []string, c config.Config) *Crawler {
 	return &Crawler{
 		urls:   urls,
 		logger: logger,
@@ -59,14 +55,14 @@ func (c *Crawler) Do() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	for i := 0; i < c.config.Workers; i++ {
+	for i := 0; i < *c.config.Workers; i++ {
 		c.wg.Add(1)
 		go c.execute(pool, ctx)
 	}
 
 	initialJobs := make([]job, 0, len(c.urls))
 	for _, initialUrl := range c.urls {
-		if c.config.Base {
+		if *c.config.Base {
 			u, err := url.Parse(initialUrl)
 			if err != nil {
 				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
@@ -166,12 +162,12 @@ func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 			defer pool.Put(buf)
 			defer c.jq.jwg.Done()
 
-			if c.config.Depth != 0 && j.depth > c.config.Depth {
+			if *c.config.Depth != 0 && j.depth > *c.config.Depth {
 				return
 			}
 
 			// do check hostname if the new url is within the initial url hostname
-			if c.config.Base {
+			if *c.config.Base {
 				u, err := url.Parse(j.url)
 				if err != nil {
 					c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))

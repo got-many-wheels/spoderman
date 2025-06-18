@@ -35,8 +35,8 @@ func New(verbose bool) *Logger {
 	return &l
 }
 
-func (l *Logger) ToVerbose() {
-	newLogger := New(true)
+func (l *Logger) ToVerbose(v bool) {
+	newLogger := New(v)
 	l.log = newLogger.log
 }
 
