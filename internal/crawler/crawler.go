@@ -1,7 +1,6 @@
 package crawler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,14 +9,12 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 
 	"github.com/got-many-wheels/spoderman/internal/config"
 	"github.com/got-many-wheels/spoderman/internal/logger"
-	"golang.org/x/net/html"
 )
 
 type Crawler struct {
@@ -81,7 +78,7 @@ func (c *Crawler) Do() error {
 		}
 		initialJobs = append(initialJobs, job{url: initialUrl, depth: 1})
 	}
-	c.jq.enqueue(initialJobs)
+	c.jq.enqueue(initialJobs, []Secret{})
 
 	go func() {
 		<-sigChan
@@ -93,6 +90,7 @@ func (c *Crawler) Do() error {
 
 	c.jq.clear()
 	c.wg.Wait()
+	c.jq.outputResults()
 
 	c.logger.Debug().Msg(fmt.Sprintf("%d worker instance created", int(numWorkerCreated)))
 	c.logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", c.jq.crawled))
@@ -120,37 +118,6 @@ func (c *Crawler) req(url string, buf *[]byte, ctx context.Context) error {
 	return nil
 }
 
-func (c *Crawler) getUrls(u string, payload []byte) []string {
-	urls := []string{}
-	tokenizer := html.NewTokenizer(bytes.NewReader(payload))
-	baseURL, err := url.Parse(u)
-	if err != nil {
-		return urls
-	}
-	for {
-		tok := tokenizer.Next()
-		switch tok {
-		case html.ErrorToken:
-			return urls
-		case html.StartTagToken, html.SelfClosingTagToken:
-			token := tokenizer.Token()
-			if token.Data == "a" {
-				for _, attr := range token.Attr {
-					if attr.Key == "href" {
-						href := strings.TrimSpace(attr.Val)
-						parsedHref, err := url.Parse(href)
-						if err != nil {
-							continue
-						}
-						fullURL := baseURL.ResolveReference(parsedHref).String()
-						urls = append(urls, fullURL)
-					}
-				}
-			}
-		}
-	}
-}
-
 func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 	defer c.wg.Done()
 	for {
@@ -175,13 +142,13 @@ func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 			}
 
 			// do check hostname if the new url is within the initial url hostname
+			u, err := url.Parse(j.url)
+			if err != nil {
+				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
+				return
+			}
+			hostname := u.Hostname()
 			if *c.config.Base {
-				u, err := url.Parse(j.url)
-				if err != nil {
-					c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
-					return
-				}
-				hostname := u.Hostname()
 				_, present := c.jq.basePaths.Load(hostname)
 				if !present {
 					return
@@ -190,7 +157,7 @@ func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 
 			c.logger.Debug().Msg(fmt.Sprintf("Visiting %s", j.url))
 
-			err := c.req(j.url, &buf, ctx)
+			err = c.req(j.url, &buf, ctx)
 			if err != nil {
 				// ignore expected canceled error
 				if errors.Is(err, context.Canceled) {
@@ -199,28 +166,27 @@ func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while requesting to %v\n", j.url))
 				return
 			}
+			pNode := newPageNode(j.url, buf)
+			if err := pNode.extractAndExtends(hostname); err != nil {
+				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while extracting html content\n"))
+				return
+			}
 
-			urls := c.getUrls(j.url, buf)
-
-			if len(urls) > 0 {
-				newJobs := make([]job, 0, len(urls))
-				for _, url := range urls {
-					if c.jq.isVisited(url) {
-						continue
-					}
-					if !c.filters.allow(url) {
-						continue
-					}
-					newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
+			newJobs := make([]job, 0, len(pNode.foundUrls))
+			for _, url := range pNode.foundUrls {
+				if c.jq.isVisited(url) {
+					continue
 				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					if len(newJobs) > 0 {
-						c.jq.enqueue(newJobs)
-					}
+				if !c.filters.allow(url) {
+					continue
 				}
+				newJobs = append(newJobs, job{url: url, depth: j.depth + 1})
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				c.jq.enqueue(newJobs, pNode.foundSecrets)
 			}
 		}()
 	}

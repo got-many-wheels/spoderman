@@ -1,8 +1,11 @@
 package crawler
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"github.com/hashicorp/go-memdb"
 )
 
 type job struct {
@@ -19,20 +22,61 @@ type jobQueue struct {
 	basePaths sync.Map
 	sm        sync.Map
 	jwg       sync.WaitGroup // jobs wait group
+	db        *memdb.MemDB
 }
 
 func newJobQueue() *jobQueue {
 	jq := &jobQueue{}
 	jq.cond = sync.NewCond(&jq.mu)
+
+	schema := &memdb.DBSchema{
+		Tables: map[string]*memdb.TableSchema{
+			"secret": {
+				Name: "secret",
+				Indexes: map[string]*memdb.IndexSchema{
+					"id": {
+						Name:    "id",
+						Unique:  true,
+						Indexer: &memdb.StringFieldIndex{Field: "HostnameKey"},
+					},
+					"key": {
+						Name:    "key",
+						Unique:  false,
+						Indexer: &memdb.StringFieldIndex{Field: "Key"},
+					},
+					"value": {
+						Name:    "value",
+						Unique:  false,
+						Indexer: &memdb.StringFieldIndex{Field: "Value"},
+					},
+				},
+			},
+		},
+	}
+
+	db, err := memdb.NewMemDB(schema)
+	if err != nil {
+		panic(err)
+	}
+	jq.db = db
 	return jq
 }
 
-func (jq *jobQueue) enqueue(jobs []job) {
+func (jq *jobQueue) enqueue(jobs []job, foundSecrets []Secret) {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
 	if jq.closed {
 		return
 	}
+
+	txn := jq.db.Txn(true)
+	for _, secret := range foundSecrets {
+		if err := txn.Insert("secret", secret); err != nil {
+			panic(err)
+		}
+	}
+	txn.Commit()
+
 	atomic.AddInt64(&jq.crawled, int64(len(jobs)))
 	for _, j := range jobs {
 		jq.jwg.Add(1)
@@ -62,6 +106,22 @@ func (jq *jobQueue) dequeue() (job, bool) {
 func (jq *jobQueue) clear() {
 	jq.jwg.Wait()
 	jq.close()
+}
+
+func (jq *jobQueue) outputResults() {
+	txn := jq.db.Txn(false)
+	defer txn.Abort()
+
+	it, err := txn.Get("secret", "id")
+	if err != nil {
+		panic(err)
+	}
+
+	// TODO: output secret as csv or json
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		p := obj.(Secret)
+		fmt.Printf("  %s %s\n", p.Key, p.Value)
+	}
 }
 
 func (jq *jobQueue) clearJobWaitGroup() {
