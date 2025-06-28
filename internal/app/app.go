@@ -21,8 +21,9 @@ func New() *App {
 		Config: config.New(),
 	}
 	app.Cli = ucli.Command{
-		Name:  "spoderman",
-		Usage: "Dead simple website crawler",
+		Name:    "spoderman",
+		Version: "0.2.0",
+		Usage:   "Dead simple website crawler",
 		Flags: []ucli.Flag{
 			&ucli.BoolFlag{
 				Name:  "verbose",
