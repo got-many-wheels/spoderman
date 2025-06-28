@@ -21,26 +21,6 @@ go install github.com/got-many-wheels/spoderman@latest
 
 ## Usages
 
-All supported options:
-
-```bash
-NAME:
-   spoderman - Dead simple website crawler
-
-USAGE:
-   spoderman [global options] [command [command options]]
-
-COMMANDS:
-   crawl    Start the crawling process
-   help, h  Shows a list of commands or help for one command
-
-GLOBAL OPTIONS:
-   --verbose   Enable verbose logging (default: false)
-   --help, -h  show help
-```
-
-### Crawling Usage
-
 #### Single url
 
 ```bash
@@ -53,6 +33,17 @@ spoderman crawl -u http://127.0.0.1:8080
 spoderman crawl -f ./examples/urls.txt
 ```
 
+#### Supported options
+
+```bash
+spoderman crawl help
+
+NAME:
+   spoderman crawl - Start the crawling process
+
+USAGE:
+   spoderman crawl [options]
+
 OPTIONS:
    --depth int, -d int                    Maximum depth for crawling. Higher values crawl deeper into link trees. (default: 2)
    --workers int, -w int                  Number of concurrent workers to crawl URLs in parallel. (default: 10)
@@ -64,6 +55,10 @@ OPTIONS:
    --config string, -i string             Set config file, defaults to set flag values or empty
    --output string                        Output location for secret results.
    --help, -h                             show help
+
+GLOBAL OPTIONS:
+   --verbose  Enable verbose logging (default: false)
+```
 
 #### Example usage:
 
