@@ -1,7 +1,11 @@
 package crawler
 
 import (
+	"encoding/csv"
 	"fmt"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -37,16 +41,18 @@ func newJobQueue() *jobQueue {
 					"id": {
 						Name:    "id",
 						Unique:  true,
-						Indexer: &memdb.StringFieldIndex{Field: "HostnameKey"},
+						Indexer: &memdb.StringFieldIndex{Field: "ID"},
+					},
+					"hostname": {
+						Name:    "hostname",
+						Indexer: &memdb.StringFieldIndex{Field: "Hostname"},
 					},
 					"key": {
 						Name:    "key",
-						Unique:  false,
 						Indexer: &memdb.StringFieldIndex{Field: "Key"},
 					},
 					"value": {
 						Name:    "value",
-						Unique:  false,
 						Indexer: &memdb.StringFieldIndex{Field: "Value"},
 					},
 				},
@@ -80,6 +86,9 @@ func (jq *jobQueue) enqueue(jobs []job, foundSecrets []Secret) {
 	atomic.AddInt64(&jq.crawled, int64(len(jobs)))
 	for _, j := range jobs {
 		jq.jwg.Add(1)
+		if err := jq.storeBasePath(j.url); err != nil {
+			continue
+		}
 		jq.queue = append(jq.queue, j)
 	}
 	jq.cond.Broadcast()
@@ -108,7 +117,20 @@ func (jq *jobQueue) clear() {
 	jq.close()
 }
 
-func (jq *jobQueue) outputResults() {
+func (jq *jobQueue) storeBasePath(initialUrl string) error {
+	u, err := url.Parse(initialUrl)
+	if err != nil {
+		return fmt.Errorf("Error while parsing initial url %v\n", initialUrl)
+	}
+	hostname := u.Hostname()
+	jq.basePaths.Store(hostname, true)
+	return nil
+}
+
+func (jq *jobQueue) outputResults(cfgPath string) error {
+	if len(cfgPath) == 0 {
+		return nil
+	}
 	txn := jq.db.Txn(false)
 	defer txn.Abort()
 
@@ -117,11 +139,43 @@ func (jq *jobQueue) outputResults() {
 		panic(err)
 	}
 
-	// TODO: output secret as csv or json
+	m := make(map[string][][]string)
+
 	for obj := it.Next(); obj != nil; obj = it.Next() {
 		p := obj.(Secret)
-		fmt.Printf("  %s %s\n", p.Key, p.Value)
+		parts := strings.Split(p.ID, ":")
+		_, ok := m[parts[0]]
+		if !ok {
+			m[parts[0]] = [][]string{}
+		}
+		val := []string{p.Key, p.Value}
+		m[parts[0]] = append(m[parts[0]], val)
 	}
+
+	for hostname, secret := range m {
+		counter := 1
+		filename := fmt.Sprintf("%s/%s.csv", cfgPath, hostname)
+		for {
+			_, err := os.Stat(filename)
+			if os.IsNotExist(err) {
+				break
+			}
+			filename = fmt.Sprintf("%s/%s_%d.csv", cfgPath, hostname, counter)
+			counter++
+		}
+
+		f, err := os.Create(filename)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		writer := csv.NewWriter(f)
+		writer.Write([]string{"secret_key", "value"})
+		writer.WriteAll(secret)
+		writer.Flush()
+	}
+
+	return nil
 }
 
 func (jq *jobQueue) clearJobWaitGroup() {

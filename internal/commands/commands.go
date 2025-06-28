@@ -74,6 +74,11 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 				Usage:   "Set config file, defaults to set flag values or empty",
 				Aliases: []string{"i"},
 			},
+			&ucli.StringFlag{
+				Name:  "output",
+				Value: cfg.Output,
+				Usage: "Output location for secret results.",
+			},
 		},
 		Action: func(ctx context.Context, c *ucli.Command) error {
 			var urls []string
@@ -107,7 +112,7 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 
 			cfgSrc := c.String("config")
 			if len(cfgSrc) > 0 {
-				currConf, err := config.ParseJsonConfig(cfgSrc)
+				currConf, err := config.UnmarshalConfig(cfgSrc)
 				if err != nil {
 					return err
 				}

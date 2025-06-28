@@ -1,8 +1,0 @@
-{
-	"verbose": true,
-	"depth": 3,
-	"workers": 10,
-	"base": false,
-	"allowedDomains": [],
-	"disallowedDomains": []
-}

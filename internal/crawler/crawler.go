@@ -67,14 +67,9 @@ func (c *Crawler) Do() error {
 
 	initialJobs := make([]job, 0, len(c.urls))
 	for _, initialUrl := range c.urls {
-		if *c.config.Base {
-			u, err := url.Parse(initialUrl)
-			if err != nil {
-				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing initial url %v\n", initialUrl))
-				continue
-			}
-			hostname := u.Hostname()
-			c.jq.basePaths.Store(hostname, true)
+		if err := c.jq.storeBasePath(initialUrl); err != nil {
+			c.logger.Error().Msg(err.Error())
+			continue
 		}
 		initialJobs = append(initialJobs, job{url: initialUrl, depth: 1})
 	}
@@ -90,7 +85,7 @@ func (c *Crawler) Do() error {
 
 	c.jq.clear()
 	c.wg.Wait()
-	c.jq.outputResults()
+	c.jq.outputResults(c.config.Output)
 
 	c.logger.Debug().Msg(fmt.Sprintf("%d worker instance created", int(numWorkerCreated)))
 	c.logger.Info().Msg(fmt.Sprintf("%d links crawled successfully", c.jq.crawled))
@@ -147,6 +142,8 @@ func (c *Crawler) execute(pool *sync.Pool, ctx context.Context) {
 				c.logger.Debug().Err(err).Msg(fmt.Sprintf("Error while parsing job url %v\n", j.url))
 				return
 			}
+
+			// TODO: should we keep this? since we already have domain filters
 			hostname := u.Hostname()
 			if *c.config.Base {
 				_, present := c.jq.basePaths.Load(hostname)

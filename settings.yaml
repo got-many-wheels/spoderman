@@ -1,0 +1,11 @@
+verbose: true
+depth: 3
+workers: 10
+base: false
+output: "./.out/"
+allowedDomains: []
+disallowedDomains: []
+rules:
+  - name: authorization_bearer
+    pattern: bearer\s*[a-zA-Z0-9_\-\.=:_\+\/]+
+

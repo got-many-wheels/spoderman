@@ -1,8 +1,11 @@
 package config
 
 import (
-	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -12,18 +15,23 @@ const (
 	DEFAULT_VERBOSE = false
 )
 
-type Config struct {
-	Verbose           *bool    `json:"verbose"`
-	Depth             *int     `json:"depth"`
-	Workers           *int     `json:"workers"`
-	Base              *bool    `json:"base"`
-	AllowedDomains    []string `json:"allowedDomains,omitempty"`
-	DisallowedDomains []string `json:"disallowedDomains,omitempty"`
+type Rule struct {
+	Name    string `json:"name"    yaml:"name"`
+	Pattern string `json:"pattern" yaml:"pattern"`
 }
 
-func Ptr[T any](v T) *T {
-	return &v
+type Config struct {
+	Verbose           *bool    `json:"verbose"            yaml:"verbose"`
+	Depth             *int     `json:"depth"              yaml:"depth"`
+	Workers           *int     `json:"workers"            yaml:"workers"`
+	Base              *bool    `json:"base"               yaml:"base"`
+	AllowedDomains    []string `json:"allowedDomains,omitempty"    yaml:"allowedDomains,omitempty"`
+	DisallowedDomains []string `json:"disallowedDomains,omitempty" yaml:"disallowedDomains,omitempty"`
+	Output            string   `json:"output"             yaml:"output"`
+	Rules             []Rule   `json:"rules"              yaml:"rules"`
 }
+
+func Ptr[T any](v T) *T { return &v }
 
 func New() *Config {
 	return &Config{
@@ -33,40 +41,56 @@ func New() *Config {
 		Verbose:           Ptr(DEFAULT_VERBOSE),
 		AllowedDomains:    []string{},
 		DisallowedDomains: []string{},
+		Output:            "",
+		Rules:             []Rule{},
 	}
 }
 
-func ParseJsonConfig(src string) (*Config, error) {
-	cfg := New()
-
-	var tempCfg Config
-
-	f, err := os.ReadFile(src)
+func UnmarshalConfig(src string) (*Config, error) {
+	raw, err := os.ReadFile(src)
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(f, &tempCfg); err != nil {
+
+	temp := Config{}
+	ext := filepath.Ext(src)
+
+	if ext != ".yaml" && ext != ".yml" {
+		return nil, errors.New("unsupported config format: " + ext)
+	}
+
+	if err := yaml.Unmarshal(raw, &temp); err != nil {
 		return nil, err
 	}
 
-	if tempCfg.Workers != nil {
-		cfg.Workers = tempCfg.Workers
+	// merge defaults + overrides
+	cfg := New()
+
+	if temp.Workers != nil {
+		cfg.Workers = temp.Workers
 	}
-	if tempCfg.Depth != nil {
-		cfg.Depth = tempCfg.Depth
+	if temp.Depth != nil {
+		cfg.Depth = temp.Depth
 	}
-	if tempCfg.Base != nil {
-		cfg.Base = tempCfg.Base
+	if temp.Base != nil {
+		cfg.Base = temp.Base
 	}
-	if tempCfg.Verbose != nil {
-		cfg.Verbose = tempCfg.Verbose
+	if temp.Verbose != nil {
+		cfg.Verbose = temp.Verbose
 	}
 
-	if len(tempCfg.AllowedDomains) > 0 {
-		cfg.AllowedDomains = tempCfg.AllowedDomains
+	if len(temp.AllowedDomains) > 0 {
+		cfg.AllowedDomains = temp.AllowedDomains
 	}
-	if len(tempCfg.DisallowedDomains) > 0 {
-		cfg.DisallowedDomains = tempCfg.DisallowedDomains
+	if len(temp.DisallowedDomains) > 0 {
+		cfg.DisallowedDomains = temp.DisallowedDomains
+	}
+
+	if temp.Output != "" {
+		cfg.Output = temp.Output
+	}
+	if len(temp.Rules) > 0 {
+		cfg.Rules = temp.Rules
 	}
 
 	return cfg, nil

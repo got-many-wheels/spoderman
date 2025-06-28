@@ -12,9 +12,10 @@ import (
 )
 
 type Secret struct {
-	HostnameKey string
-	Key         string
-	Value       string
+	ID       string
+	Hostname string
+	Key      string
+	Value    string
 }
 
 type pageNode struct {
@@ -56,7 +57,10 @@ func (node *pageNode) extractAndExtends(hostname string) error {
 		matches := re.FindAllStringSubmatch(pStr, -1)
 		for _, match := range matches {
 			if len(match) > 0 && match[0] != "" {
-				node.foundSecrets = append(node.foundSecrets, Secret{HostnameKey: fmt.Sprintf("%s:%s", hostname, key), Key: key, Value: match[0]})
+				node.foundSecrets = append(
+					node.foundSecrets,
+					Secret{ID: fmt.Sprintf("%s:%s", hostname, match[0]), Hostname: hostname, Key: key, Value: match[0]},
+				)
 			}
 		}
 	}
