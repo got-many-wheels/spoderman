@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hashicorp/go-memdb"
 )
@@ -27,10 +28,22 @@ type jobQueue struct {
 	sm        sync.Map
 	jwg       sync.WaitGroup // jobs wait group
 	db        *memdb.MemDB
+
+	// interval tings...
+	withTicker bool
+	ticker     *time.Ticker
+	tickerDone chan struct{}
 }
 
-func newJobQueue() *jobQueue {
+func newJobQueue(withInterval int) *jobQueue {
 	jq := &jobQueue{}
+
+	if withInterval > 0 {
+		jq.withTicker = true
+		jq.ticker = time.NewTicker(time.Millisecond)
+		jq.tickerDone = make(chan struct{})
+	}
+
 	jq.cond = sync.NewCond(&jq.mu)
 
 	schema := &memdb.DBSchema{
@@ -98,18 +111,42 @@ func (jq *jobQueue) dequeue() (job, bool) {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
 
-	// wait until there's work to do, or else turu
+	// wait until there is work or we're closed
 	for len(jq.queue) == 0 && !jq.closed {
 		jq.cond.Wait()
 	}
 
-	if jq.closed && len(jq.queue) == 0 {
+	// if closed and no jobs, return
+	if len(jq.queue) == 0 && jq.closed {
 		return job{}, false
 	}
 
-	job := jq.queue[0]
+	if jq.withTicker {
+		jq.mu.Unlock() // temporarily unlock to wait on ticker
+		select {
+		case <-jq.ticker.C:
+			jq.mu.Lock()
+			if len(jq.queue) == 0 {
+				return job{}, false
+			}
+			j := jq.queue[0]
+			jq.queue = jq.queue[1:]
+			return j, true
+		case <-jq.tickerDone:
+			jq.mu.Lock()
+			return job{}, false
+		}
+	}
+
+	j := jq.queue[0]
 	jq.queue = jq.queue[1:]
-	return job, true
+	return j, true
+}
+
+func (jq *jobQueue) stopTickerChan() {
+	if jq.withTicker {
+		close(jq.tickerDone)
+	}
 }
 
 func (jq *jobQueue) clear() {
@@ -188,6 +225,9 @@ func (jq *jobQueue) close() {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
 	jq.closed = true
+	if jq.withTicker {
+		jq.ticker.Stop()
+	}
 	jq.cond.Broadcast()
 }
 

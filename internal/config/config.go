@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	DEFAULT_DEPTH   = 2
-	DEFAULT_WORKERS = 10
-	DEFAULT_BASE    = false
-	DEFAULT_VERBOSE = false
+	DEFAULT_DEPTH    = 2
+	DEFAULT_INTERVAL = 0
+	DEFAULT_WORKERS  = 10
+	DEFAULT_BASE     = false
+	DEFAULT_VERBOSE  = false
 )
 
 type Rule struct {
@@ -21,14 +22,15 @@ type Rule struct {
 }
 
 type Config struct {
-	Verbose           *bool    `json:"verbose"            yaml:"verbose"`
-	Depth             *int     `json:"depth"              yaml:"depth"`
-	Workers           *int     `json:"workers"            yaml:"workers"`
-	Base              *bool    `json:"base"               yaml:"base"`
-	AllowedDomains    []string `json:"allowedDomains,omitempty"    yaml:"allowedDomains,omitempty"`
-	DisallowedDomains []string `json:"disallowedDomains,omitempty" yaml:"disallowedDomains,omitempty"`
-	Output            string   `json:"output"             yaml:"output"`
-	Rules             []Rule   `json:"rules"              yaml:"rules"`
+	Verbose           *bool    `yaml:"verbose"`
+	Depth             *int     `yaml:"depth"`
+	Workers           *int     `yaml:"workers"`
+	Base              *bool    `yaml:"base"`
+	AllowedDomains    []string `yaml:"allowedDomains,omitempty"`
+	DisallowedDomains []string `yaml:"disallowedDomains,omitempty"`
+	Output            string   `yaml:"output"`
+	Rules             []Rule   `yaml:"rules"`
+	Interval          *int     `json:"interval"` // interval in miliseconds
 }
 
 func Ptr[T any](v T) *T { return &v }
@@ -43,6 +45,7 @@ func New() *Config {
 		DisallowedDomains: []string{},
 		Output:            "",
 		Rules:             []Rule{},
+		Interval:          Ptr(int(DEFAULT_INTERVAL)),
 	}
 }
 
@@ -77,6 +80,10 @@ func UnmarshalConfig(src string) (*Config, error) {
 	}
 	if temp.Verbose != nil {
 		cfg.Verbose = temp.Verbose
+	}
+
+	if temp.Interval != nil {
+		cfg.Interval = temp.Interval
 	}
 
 	if len(temp.AllowedDomains) > 0 {

@@ -38,7 +38,7 @@ func New(logger *logger.Logger, urls []string, c config.Config) *Crawler {
 		urls:    urls,
 		logger:  logger,
 		config:  c,
-		jq:      newJobQueue(),
+		jq:      newJobQueue(*c.Interval),
 		filters: filters,
 	}
 }
@@ -84,6 +84,7 @@ func (c *Crawler) Do() error {
 	}()
 
 	c.jq.clear()
+	c.jq.stopTickerChan() // close ticker channel so that the program can exit
 	c.wg.Wait()
 	c.jq.outputResults(c.config.Output)
 

@@ -75,9 +75,16 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 				Aliases: []string{"i"},
 			},
 			&ucli.StringFlag{
-				Name:  "output",
-				Value: cfg.Output,
-				Usage: "Output location for secret results.",
+				Name:    "output",
+				Value:   cfg.Output,
+				Usage:   "Output location for secret results.",
+				Aliases: []string{"o"},
+			},
+			&ucli.IntFlag{
+				Name:    "interval",
+				Value:   *cfg.Interval,
+				Usage:   "Interval between each job",
+				Aliases: []string{"it"},
 			},
 		},
 		Action: func(ctx context.Context, c *ucli.Command) error {
@@ -110,13 +117,8 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 				}
 			}
 
-			cfgSrc := c.String("config")
-			if len(cfgSrc) > 0 {
-				currConf, err := config.UnmarshalConfig(cfgSrc)
-				if err != nil {
-					return err
-				}
-				cfg = currConf
+			if c.Int("interval") != 0 {
+				cfg.Interval = config.Ptr(c.Int("interval"))
 			}
 
 			allowedDomains, disallowedDomains := c.String("allowedDomains"), c.String("disallowedDomains")
@@ -127,6 +129,15 @@ func Crawl(cfg *config.Config, logger *logger.Logger) *ucli.Command {
 			if len(disallowedDomains) > 0 {
 				zp := regexp.MustCompile(` *, *`)
 				cfg.DisallowedDomains = append(cfg.DisallowedDomains, zp.Split(disallowedDomains, -1)...)
+			}
+
+			cfgSrc := c.String("config")
+			if len(cfgSrc) > 0 {
+				currConf, err := config.UnmarshalConfig(cfgSrc)
+				if err != nil {
+					return err
+				}
+				cfg = currConf
 			}
 
 			crawler := crawler.New(logger, slices.Compact(urls), *cfg)

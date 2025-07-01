@@ -1,5 +1,6 @@
 verbose: true
 depth: 3
+interval: 0
 workers: 10
 base: false
 output: "./.out/"

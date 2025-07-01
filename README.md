@@ -53,7 +53,8 @@ OPTIONS:
    --allowedDomains string, -a string     Domain whitelist, separated by commas.
    --disallowedDomains string, -a string  Domain blacklist, separated by commas.
    --config string, -i string             Set config file, defaults to set flag values or empty
-   --output string                        Output location for secret results.
+   --output string, -o string             Output location for secret results.
+   --interval int, --it int               Interval between each job (default: 0)
    --help, -h                             show help
 
 GLOBAL OPTIONS:
@@ -73,6 +74,10 @@ You can use your own crawling settings by providing `-i <path to setting>` flag 
 ```yaml
 verbose: true
 depth: 3
+
+# interval between each job in miliseconds, 0 means there is no delay.
+interval: 0
+
 workers: 10
 base: false
 
